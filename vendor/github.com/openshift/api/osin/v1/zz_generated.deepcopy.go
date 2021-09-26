@@ -404,11 +404,6 @@ func (in *OpenIDClaims) DeepCopyInto(out *OpenIDClaims) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
-	if in.Groups != nil {
-		in, out := &in.Groups, &out.Groups
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
 	return
 }
 

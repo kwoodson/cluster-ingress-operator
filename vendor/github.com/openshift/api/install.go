@@ -56,7 +56,6 @@ import (
 	"github.com/openshift/api/samples"
 	"github.com/openshift/api/security"
 	"github.com/openshift/api/servicecertsigner"
-	"github.com/openshift/api/sharedresource"
 	"github.com/openshift/api/template"
 	"github.com/openshift/api/user"
 
@@ -89,7 +88,6 @@ var (
 		samples.Install,
 		security.Install,
 		servicecertsigner.Install,
-		sharedresource.Install,
 		template.Install,
 		user.Install,
 		machine.Install,

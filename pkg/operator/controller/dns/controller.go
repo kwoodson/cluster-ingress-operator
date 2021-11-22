@@ -3,14 +3,21 @@ package dns
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"reflect"
+	"sync"
 	"time"
+
+	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth"
+	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth/credentials"
+	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth/credentials/provider"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"k8s.io/client-go/tools/record"
+	"k8s.io/klog/v2"
 
 	iov1 "github.com/openshift/api/operatoringress/v1"
 	"github.com/openshift/cluster-ingress-operator/pkg/dns"
@@ -62,8 +69,12 @@ const (
 	kubeCloudConfigName = "kube-cloud-config"
 	// cloudCABundleKey is the key in the kube cloud config ConfigMap where the custom CA bundle is located
 	cloudCABundleKey = "ca-bundle.pem"
+
+	// kubeCredntialCredentials is the name of the property inside of the secret where the credentials live
+	kubeCredentialCredentials = "credentials"
 )
 
+var mutex sync.Mutex
 var log = logf.Logger.WithName(controllerName)
 
 func New(mgr manager.Manager, config Config) (runtimecontroller.Controller, error) {
@@ -599,10 +610,18 @@ func (r *reconciler) createDNSProvider(dnsConfig *configv1.DNS, platformStatus *
 			privateZones = append(privateZones, dnsConfig.Spec.PrivateZone.ID)
 		}
 
+		cred, err := fetchCredentialsIniFromSecret(creds)
+		if err != nil {
+			return nil, err
+		}
+		c := cred.(*credentials.AccessKeyCredential)
+		klog.Infof("alibaba secrets=", c)
+		klog.Info("accesskeyid=", c.AccessKeyId)
+		klog.Info("accesskeysecret=", c.AccessKeySecret)
 		provider, err := alidns.NewProvider(alidns.Config{
 			Region:       platformStatus.AlibabaCloud.Region,
-			AccessKeyID:  string(creds.Data["alibabacloud_access_key_id"]),
-			AccessSecret: string(creds.Data["alibabacloud_secret_access_key"]),
+			AccessKeyID:  c.AccessKeyId,
+			AccessSecret: c.AccessKeySecret,
 			PrivateZones: privateZones,
 		})
 		if err != nil {
@@ -657,4 +676,31 @@ func getIbmDNSProvider(dnsConfig *configv1.DNS, creds *corev1.Secret, cisInstanc
 		return nil, fmt.Errorf("failed to create IBM DNS manager: %v", err)
 	}
 	return provider, nil
+}
+
+func fetchCredentialsIniFromSecret(secret *corev1.Secret) (auth.Credential, error) {
+	creds, ok := secret.Data[kubeCredentialCredentials]
+	if !ok {
+		return nil, fmt.Errorf("failed to fetch key 'credentials' in secret data")
+	}
+	f, err := ioutil.TempFile("", "alibaba-creds-*")
+	if err != nil {
+		return nil, err
+	}
+	_, err = f.Write(creds)
+	if err != nil {
+		return nil, err
+	}
+	// This lock is used to prevent the environment variable from being updated while we
+	// are using the environment variable to call the Alibaba credential provider chain.
+	mutex.Lock()
+	os.Setenv(provider.ENVCredentialFile, f.Name())
+	defer mutex.Unlock()
+	defer os.Unsetenv(provider.ENVCredentialFile)
+	defer os.Remove(f.Name())
+	defer f.Close()
+	// use Alibaba provider initialization
+	p := provider.NewProfileProvider("default")
+	// return a valid auth credential
+	return p.Resolve()
 }
